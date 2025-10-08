@@ -259,6 +259,16 @@ def main():
         parse_input()
         print("\n\nParsing completed successfully\n")
 
+def parse_song(filepath):
+    """Wrapper used by Full.py — runs parser and returns successfully when done."""
+    global input_file
+    with open(filepath, 'r') as f:
+        input_file = f
+        get_token()       # initialize first token
+        parse_input()     # run parser normally
+    print("\nParsing completed successfully\n")
+    # You can return whatever structure the calculator needs
+    return True
 
 if __name__ == "__main__":
     main()

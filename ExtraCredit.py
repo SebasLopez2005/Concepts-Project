@@ -85,11 +85,15 @@ class Lexer:
         self.get_token()
 
     def get_token(self):
-        """Get next non-whitespace character."""
+        """Read the next non-whitespace or irrelevant character."""
         ch = self.file.read(1)
-        while ch and ch in (' ', '\n', '\t'):
+        # Skip all characters that are not letters, digits, or valid chord symbols
+        while ch and not (
+        ch.isalnum() or ch in ('#', 'b', '/', '|', '^', '(', ')', '-', '+', 'o')
+    ):
             ch = self.file.read(1)
         self.token = ch if ch else ''
+
 
     def match(self, expected):
         """Consume token if it matches."""
