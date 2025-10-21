@@ -1,26 +1,33 @@
-# Parser Sebas Lopez, Diego Bonilla, Luis Baeza
+# =====================================================
+# === Parser Module (for Full Parser + Calculator) ====
+# =====================================================
+# Authors: Sebastián López, Diego Bonilla, Luis Baeza
+# =====================================================
 
 import sys
 import os
 
-# Global variables
-token = ''
+# =====================================================
+# === GLOBALS =========================================
+# =====================================================
+token = ""
 input_file = None
+parsed_chords = []  # [(root, qual, ext_type, ext, sus, bass)]
 
-# -----------------------
-# Lexer utilities
-# -----------------------
+
+# =====================================================
+# === TOKEN HANDLING =================================
+# =====================================================
 def get_token():
-    """Read the next non-whitespace character from the file."""
+    """Read next non-whitespace character."""
     global token
     ch = input_file.read(1)
-    while ch and ch in (' ', '\n', '\t'):
+    while ch and ch in (" ", "\n", "\t"):
         ch = input_file.read(1)
-    token = ch if ch else ''  # Empty string = EOF
+    token = ch if ch else ""
 
 
 def match(expected, message):
-    """Consume a token if it matches the expected character, else raise an error."""
     global token
     if token == expected:
         get_token()
@@ -32,279 +39,204 @@ def error(message):
     print(f"\nParse error: {message}")
     sys.exit(1)
 
-# -----------------------
-# Grammar functions
-# -----------------------
 
+# =====================================================
+# === GRAMMAR =========================================
+# =====================================================
 def parse_input():
-    # input -> song EOF
     song()
-    if token != '':
+    if token != "":
         error("EOF expected")
 
 
 def song():
-    # song -> bar {bar} '|'
-    # Keep parsing bars until a final '|'
-    while token and token != '|':
+    while token and token != "|":
         bar()
-    if token == '|':
-        print(token, end='')
-        match('|', "| expected")
+    if token == "|":
+        print(token, end="")
+        match("|", "| expected")
     else:
         error("| expected at end of song")
 
 
 def bar():
-    # bar -> [meter] chords '|'
     if token.isdigit():
         meter()
     chords()
-    if token == '|':
-        print(token, end='')
-        match('|', "| expected")
+    if token == "|":
+        print(token, end="")
+        match("|", "| expected")
     else:
         error("| expected at end of bar")
 
 
 def meter():
-    # meter -> numerator "/" denominator
     x = numerator()
-    print(f"{x}{token}", end='')
-    match('/', "/ expected in meter")
+    print(f"{x}{token}", end="")
+    match("/", "/ expected in meter")
     y = denominator()
-    print(y, end='')
+    print(y, end="")
 
 
 def numerator():
-    # numerator -> "1" | "2" | ... | "15"
     if not token.isdigit():
         error("Expected a number")
-    value = 0
+    val = ""
     while token.isdigit():
-        value = value * 10 + int(token)
+        val += token
         get_token()
+    value = int(val)
     if value < 1 or value > 15:
         error("Invalid numerator")
     return value
 
 
 def denominator():
-    # denominator -> "1" | "2" | "4" | "8" | "16"
     if not token.isdigit():
         error("Expected a number")
-    value = 0
+    val = ""
     while token.isdigit():
-        value = value * 10 + int(token)
+        val += token
         get_token()
+    value = int(val)
     if value not in (1, 2, 4, 8, 16):
         error("Invalid denominator")
     return value
 
 
 def chords():
-    # chords -> "NC" | "%" | chord {chord}
-    global token
-    if token == 'N':
-        match('N', "N expected")
-        match('C', "C expected")
-        print("NC", end='')
-    elif token == '%':
-        match('%', "% expected")
-        print("%", end='')
+    global parsed_chords
+    if token == "N":
+        match("N", "N expected")
+        match("C", "C expected")
+        print("NC", end="")
+    elif token == "%":
+        match("%", "% expected")
+        print("%", end="")
     else:
-        while token and token != '|':
+        while token and token != "|":
             chord()
 
 
 def chord():
-    # chord -> root [description] [bass]
-    root()
-    if token in ('s', '-', '+', 'o', '7', '9', '1', '6', '^', '(', '5', 'n'):
-        description()
-    if token == '/':
-        bass()
+    """chord -> root [description] [bass]"""
+    global parsed_chords
+    root = read_note()
+    qual, ext_type, ext, sus = " ", " ", 0, 0
+    bass = ""
+
+    if token in ("-", "+", "o", "^", "s", "n", "(", "5", "6", "7", "9", "1"):
+        qual, ext_type, ext, sus = read_description()
+
+    if token == "/":
+        match("/", "/ expected")
+        bass = read_note()
+
+    parsed_chords.append((root, qual, ext_type, ext, sus, bass))
 
 
-
-def root():
-    # root -> note
-    note()
-
-
-def note():
-    # note -> letter [acc]
-    letter()
-    if token in ('b', '#'):
-        acc()
-
-
-def letter():
-    # letter -> A | B | C | D | E | F | G
+def read_note():
     global token
-    if token in 'ABCDEFG':
-        print(token, end='')
+    if token not in "ABCDEFG":
+        error(f"Invalid note letter {token}")
+    note = token
+    get_token()
+    if token in ("b", "#"):
+        note += token
         get_token()
-    else:
-        error(f"Invalid character found {token}")
+    print(note, end="")
+    return note
 
 
-def acc():
-    # acc -> '#' | 'b'
+def read_description():
     global token
-    if token in ('#', 'b'):
-        print(token, end='')
-        get_token()
-    else:
-        error("Invalid accidental")
+    qual, ext_type, ext, sus = " ", " ", 0, 0
 
-
-def description():
-    # description -> qual | qual qnum | qnum | qnum sus | sus | (add) | noX
-    has_qual = False
-    has_qnum = False
-    has_sus = False
-    has_add = False
-    has_omit = False
-
-    if token in ('-', '+', 'o'):
-        qual()
-        has_qual = True
-
-    # power chords like E5 or A5
-    if token == '5':
-        print('5', end='')
-        get_token()
-        has_qnum = True
-
-    if token in ('^', '7', '9', '1', '6'):
-        qnum()
-        has_qnum = True
-
-    # parentheses for (9), (13), (add9)
-    if token == '(':
-        match('(', "( expected")
-        if token.isdigit():
-            val = ""
-            while token.isdigit():
-                val += token
-                get_token()
-            print(f"({val})", end='')
-        match(')', ") expected")
-        has_add = True
-
-    # omissions like no3 or no5
-    if token == 'n':
-        omit()
-        has_omit = True
-
-    if token == 's' and not has_qual:
-        sus()
-        has_sus = True
-
-    if not (has_qual or has_qnum or has_sus or has_add or has_omit):
-        error("Invalid description: expected qual, qnum, sus, add, or omit")
-
-
-def qual():
-    # qual -> '-' | '+' | 'o'
-    global token
-    if token in ('-', '+', 'o'):
-        print(token, end='')
-        get_token()
-    else:
-        error("Invalid qual")
-
-
-def qnum():
-    # qnum -> ['^'] num or 6
-    global token
-    temp = ''
-    if token == '^':
-        temp = '^'
-        match('^', "^ expected")
-    x = num()
-    # num() already prints the number
-    if temp:
-        print(temp, end='')
-
-
-def num():
-    """Parse valid extension numbers like 5, 6, 7, 9, 11, 13."""
-    global token
-    if not token.isdigit():
-        error("Expected a number")
-
-    val = ""
-    while token.isdigit():
-        val += token
+    # quality
+    if token in ("-", "+", "o"):
+        qual = token
+        print(token, end="")
         get_token()
 
-    # Try to convert to int safely
-    try:
-        value = int(val)
-    except ValueError:
-        error("Invalid number format")
+    # extensions (^7, 9, 11, 13, etc.)
+    if token == "^":
+        ext_type = "^"
+        print("^", end="")
+        get_token()
 
-    # Allow common extensions
-    if value not in (5, 6, 7, 9, 11, 13):
-        # don't kill parser if number was part of a pattern like A6(9)
-        # just print it as literal text
+    if token.isdigit():
+        val = ""
+        while token.isdigit():
+            val += token
+            get_token()
+        try:
+            ext = int(val)
+        except ValueError:
+            ext = 0
         print(val, end="")
-        return value
 
-    print(value, end="")
-    return value
+    # parentheses for (9), (13)
+    if token == "(":
+        match("(", "( expected")
+        val = ""
+        while token.isdigit():
+            val += token
+            get_token()
+        print(f"({val})", end="")
+        match(")", ") expected")
 
-
-
-def sus():
-    # sus -> 'sus2' | 'sus4'
-    global token
-    if token == 's':
-        match('s', "invalid sus sequence")
-        match('u', "invalid sus sequence")
-        match('s', "invalid sus sequence")
-        if token == '2':
-            print("sus2", end='')
-            match('2', "2 expected")
-        elif token == '4':
-            print("sus4", end='')
-            match('4', "4 expected")
+    # omissions (no3 / no5)
+    if token == "n":
+        match("n", "n expected")
+        match("o", "o expected")
+        if token == "3":
+            print("no3", end="")
+            get_token()
+        elif token == "5":
+            print("no5", end="")
+            get_token()
         else:
-            error("Invalid suspended sequence")
-    else:
-        error("Invalid input as sus")
+            error("Invalid omission")
+
+    # suspensions
+    if token == "s":
+        match("s", "s expected")
+        match("u", "u expected")
+        match("s", "s expected")
+        if token == "2":
+            sus = 2
+            print("sus2", end="")
+            match("2", "2 expected")
+        elif token == "4":
+            sus = 4
+            print("sus4", end="")
+            match("4", "4 expected")
+        else:
+            error("Invalid sus")
+
+    return qual, ext_type, ext, sus
 
 
-def omit():
-    # omit -> 'no3' | 'no5'
-    global token
-    match('n', "n expected")
-    match('o', "o expected")
-    if token == '3':
-        print("no3", end='')
+# =====================================================
+# === WRAPPER =========================================
+# =====================================================
+def parse_song(filepath):
+    """Wrapper for Full.py integration — returns structured chords."""
+    global input_file, parsed_chords
+    parsed_chords = []
+    with open(filepath, "r") as f:
+        input_file = f
+        print("The following characters demonstrate the tokens being parsed.\n")
         get_token()
-    elif token == '5':
-        print("no5", end='')
-        get_token()
-    else:
-        error("Invalid omission type")
+        parse_input()
+        print("\nParsing completed successfully\n")
+    return parsed_chords
 
 
-def bass():
-    # bass -> '/' note
-    print('/', end='')
-    match('/', "/ expected")
-    note()
-
-
-# -----------------------
-# Main program
-# -----------------------
-
+# =====================================================
+# === STANDALONE MAIN =================================
+# =====================================================
 def main():
-    global input_file
     filepath = input("Enter the path of the file to be parsed: ").strip()
     if not filepath.lower().endswith(".txt"):
         print("Error: Only .txt files are supported")
@@ -313,25 +245,11 @@ def main():
         print("Error: cannot open file")
         sys.exit(1)
 
-    with open(filepath, 'r') as f:
-        input_file = f
-        print("The following characters demonstrate the tokens being parsed.\n")
-        get_token()
-        parse_input()
-        print("\n\nParsing completed successfully\n")
-
-
-def parse_song(filepath):
-    """Wrapper used by Full.py — runs parser and returns successfully when done."""
-    global input_file
-    with open(filepath, 'r') as f:
-        input_file = f
-        get_token()       # initialize first token
-        parse_input()     # run parser normally
-    print("\nParsing completed successfully\n")
-    return True
+    chords = parse_song(filepath)
+    print(f"Total parsed chords: {len(chords)}")
 
 
 if __name__ == "__main__":
     main()
+
 
