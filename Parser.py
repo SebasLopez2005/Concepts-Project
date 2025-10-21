@@ -120,10 +120,11 @@ def chords():
 def chord():
     # chord -> root [description] [bass]
     root()
-    if token in ('s', '-', '+', 'o', '7', '9', '1', '^'):
+    if token in ('s', '-', '+', 'o', '7', '9', '1', '6', '^', '(', '5', 'n'):
         description()
     if token == '/':
         bass()
+
 
 
 def root():
@@ -145,7 +146,7 @@ def letter():
         print(token, end='')
         get_token()
     else:
-        error("Invalid character found")
+        error(f"Invalid character found {token}")
 
 
 def acc():
@@ -159,22 +160,50 @@ def acc():
 
 
 def description():
-    # description -> qual | qual qnum | qnum | qnum sus | sus
+    # description -> qual | qual qnum | qnum | qnum sus | sus | (add) | noX
     has_qual = False
     has_qnum = False
     has_sus = False
+    has_add = False
+    has_omit = False
 
     if token in ('-', '+', 'o'):
         qual()
         has_qual = True
-    if token in ('^', '7', '9', '1'):
+
+    # power chords like E5 or A5
+    if token == '5':
+        print('5', end='')
+        get_token()
+        has_qnum = True
+
+    if token in ('^', '7', '9', '1', '6'):
         qnum()
         has_qnum = True
+
+    # parentheses for (9), (13), (add9)
+    if token == '(':
+        match('(', "( expected")
+        if token.isdigit():
+            val = ""
+            while token.isdigit():
+                val += token
+                get_token()
+            print(f"({val})", end='')
+        match(')', ") expected")
+        has_add = True
+
+    # omissions like no3 or no5
+    if token == 'n':
+        omit()
+        has_omit = True
+
     if token == 's' and not has_qual:
         sus()
         has_sus = True
-    if not (has_qual or has_qnum or has_sus):
-        error("Invalid description: expected qual, qnum, or sus")
+
+    if not (has_qual or has_qnum or has_sus or has_add or has_omit):
+        error("Invalid description: expected qual, qnum, sus, add, or omit")
 
 
 def qual():
@@ -188,28 +217,45 @@ def qual():
 
 
 def qnum():
-    # qnum -> ['^'] num
+    # qnum -> ['^'] num or 6
     global token
     temp = ''
     if token == '^':
         temp = '^'
         match('^', "^ expected")
     x = num()
-    print(f"{temp}{x}", end='')
+    # num() already prints the number
+    if temp:
+        print(temp, end='')
 
 
 def num():
-    # num -> '7' | '9' | '11' | '13'
+    """Parse valid extension numbers like 5, 6, 7, 9, 11, 13."""
     global token
     if not token.isdigit():
         error("Expected a number")
-    value = 0
+
+    val = ""
     while token.isdigit():
-        value = value * 10 + int(token)
-        match(token, "")
-    if value not in (7, 9, 11, 13):
-        error("Invalid num")
+        val += token
+        get_token()
+
+    # Try to convert to int safely
+    try:
+        value = int(val)
+    except ValueError:
+        error("Invalid number format")
+
+    # Allow common extensions
+    if value not in (5, 6, 7, 9, 11, 13):
+        # don't kill parser if number was part of a pattern like A6(9)
+        # just print it as literal text
+        print(val, end="")
+        return value
+
+    print(value, end="")
     return value
+
 
 
 def sus():
@@ -229,6 +275,21 @@ def sus():
             error("Invalid suspended sequence")
     else:
         error("Invalid input as sus")
+
+
+def omit():
+    # omit -> 'no3' | 'no5'
+    global token
+    match('n', "n expected")
+    match('o', "o expected")
+    if token == '3':
+        print("no3", end='')
+        get_token()
+    elif token == '5':
+        print("no5", end='')
+        get_token()
+    else:
+        error("Invalid omission type")
 
 
 def bass():
@@ -259,6 +320,7 @@ def main():
         parse_input()
         print("\n\nParsing completed successfully\n")
 
+
 def parse_song(filepath):
     """Wrapper used by Full.py — runs parser and returns successfully when done."""
     global input_file
@@ -267,8 +329,9 @@ def parse_song(filepath):
         get_token()       # initialize first token
         parse_input()     # run parser normally
     print("\nParsing completed successfully\n")
-    # You can return whatever structure the calculator needs
     return True
+
 
 if __name__ == "__main__":
     main()
+

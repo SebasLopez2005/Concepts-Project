@@ -12,7 +12,7 @@ import sys
 # =====================================================
 token = ""
 input_file = None
-parsed_chords = []  # List of tuples: (root, qual, ext, ext_type, sus, bass)
+parsed_chords = []  # [(root, qual, ext, ext_type, sus, bass)]
 
 
 # =====================================================
@@ -81,10 +81,11 @@ def meter():
 def numerator():
     if not token.isdigit():
         error("Expected a number")
-    value = 0
+    val = ""
     while token.isdigit():
-        value = value * 10 + int(token)
+        val += token
         get_token()
+    value = int(val)
     if value < 1 or value > 15:
         error("Invalid numerator")
     return value
@@ -93,17 +94,17 @@ def numerator():
 def denominator():
     if not token.isdigit():
         error("Expected a number")
-    value = 0
+    val = ""
     while token.isdigit():
-        value = value * 10 + int(token)
+        val += token
         get_token()
+    value = int(val)
     if value not in (1, 2, 4, 8, 16):
         error("Invalid denominator")
     return value
 
 
 def chords():
-    global token
     if token == "N":
         match("N", "N expected")
         match("C", "C expected")
@@ -119,46 +120,44 @@ def chords():
 def chord():
     """chord -> root [description] [bass]"""
     global parsed_chords
-    current_root = read_note()
-    current_qual, current_ext_type, current_ext, current_sus = " ", " ", 0, 0
-    current_bass = ""
+    root = read_note()
+    qual, ext_type, ext, sus = " ", " ", 0, 0
+    bass = ""
 
-    if token in ("s", "-", "+", "o", "7", "9", "1", "^"):
-        current_qual, current_ext_type, current_ext, current_sus = read_description()
+    if token in ("-", "+", "o", "^", "s", "n", "(", "5", "6", "7", "9", "1"):
+        qual, ext_type, ext, sus = read_description()
 
     if token == "/":
         match("/", "/ expected")
-        current_bass = read_note()
+        bass = read_note()
 
-    parsed_chords.append(
-        (current_root, current_qual, current_ext, current_ext_type, current_sus, current_bass)
-    )
+    parsed_chords.append((root, qual, ext, ext_type, sus, bass))
 
 
 def read_note():
-    """Parse and return a note like 'F', 'Db', or 'A#'."""
     global token
     if token not in "ABCDEFG":
-        error("Invalid note letter")
-    root = token
+        error(f"Invalid note letter {token}")
+    note = token
     get_token()
     if token in ("b", "#"):
-        root += token
+        note += token
         get_token()
-    print(root, end="")
-    return root
+    print(note, end="")
+    return note
 
 
 def read_description():
-    """Parse and return (qual, ext_type, ext, sus)."""
     global token
     qual, ext_type, ext, sus = " ", " ", 0, 0
 
+    # quality
     if token in ("-", "+", "o"):
         qual = token
         print(token, end="")
         get_token()
 
+    # extensions (^7, 9, 11, 13, etc.)
     if token == "^":
         ext_type = "^"
         print("^", end="")
@@ -169,8 +168,47 @@ def read_description():
         while token.isdigit():
             val += token
             get_token()
-        ext = int(val)
+        try:
+            ext = int(val)
+        except ValueError:
+            ext = 0
+        print(val, end="")
 
+    # parentheses for (9) (13)
+    if token == "(":
+        match("(", "( expected")
+        val = ""
+        while token.isdigit():
+            val += token
+            get_token()
+        try:
+            paren_ext = int(val)
+        except ValueError:
+            paren_ext = 0
+        print(f"({val})", end="")
+        match(")", ") expected")
+        # ✅ store the parenthesis extension — override or add
+        # Combine if both exist (like A6(9))
+        if ext and paren_ext and ext != paren_ext:
+            ext = (ext, paren_ext)
+        else:
+            ext = paren_ext if ext == 0 else ext
+
+
+    # omissions (no3 / no5)
+    if token == "n":
+        match("n", "n expected")
+        match("o", "o expected")
+        if token == "3":
+            print("no3", end="")
+            get_token()
+        elif token == "5":
+            print("no5", end="")
+            get_token()
+        else:
+            error("Invalid omission")
+
+    # suspensions
     if token == "s":
         match("s", "s expected")
         match("u", "u expected")
@@ -184,16 +222,16 @@ def read_description():
             print("sus4", end="")
             match("4", "4 expected")
         else:
-            error("Invalid sus type")
+            error("Invalid sus")
 
     return qual, ext_type, ext, sus
+
 
 
 # =====================================================
 # === PARSER WRAPPER =================================
 # =====================================================
 def parse_song(filepath):
-    """Wrapper for external calls."""
     global input_file, parsed_chords
     parsed_chords = []
     with open(filepath, "r") as f:
@@ -253,6 +291,7 @@ def note_to_pitch_class(note):
 
 
 def create_chord_arr(chord):
+    """Final locked-in pitch class generator (matches expected histogram, supports multi-extensions like A6(9))."""
     arr = [0] * 12
     root_pc = note_to_pitch_class(chord.root)
     if root_pc == -1:
@@ -260,64 +299,96 @@ def create_chord_arr(chord):
         sys.exit(1)
     arr[root_pc] = 1
 
-    # Quality
-    if chord.qual == "-":
-        arr[(root_pc + 3) % 12] = 1
-        arr[(root_pc + 7) % 12] = 1
-    elif chord.qual == "+":
-        arr[(root_pc + 4) % 12] = 1
+    # Common intervals
+    third_major = (root_pc + 4) % 12
+    third_minor = (root_pc + 3) % 12
+    fifth = (root_pc + 7) % 12
+
+    # --- Quality ---
+    if chord.qual == "-":         # minor
+        arr[third_minor] = 1
+        arr[fifth] = 1
+    elif chord.qual == "+":       # augmented
+        arr[third_major] = 1
         arr[(root_pc + 8) % 12] = 1
-    elif chord.qual == "o":
-        arr[(root_pc + 3) % 12] = 1
+    elif chord.qual == "o":       # diminished
+        arr[third_minor] = 1
         arr[(root_pc + 6) % 12] = 1
-    else:
-        arr[(root_pc + 4) % 12] = 1
-        arr[(root_pc + 7) % 12] = 1
+    else:                         # major
+        arr[third_major] = 1
+        arr[fifth] = 1
 
-    # Extensions
-    ext = chord.extension
-    if ext == 7:
-        arr[(root_pc + (11 if chord.ext_type == "^" else 10)) % 12] = 1
-    elif ext == 9:
-        arr[(root_pc + 2) % 12] = 1
-        arr[(root_pc + (11 if chord.ext_type == "^" else 10)) % 12] = 1
-    elif ext == 11:
-        arr[(root_pc + 5) % 12] = 1
-        arr[(root_pc + (11 if chord.ext_type == "^" else 10)) % 12] = 1
-    elif ext == 13:
+    # ✅ Allow multiple extensions (tuple or list)
+    extensions = chord.extension if isinstance(chord.extension, (list, tuple)) else [chord.extension]
+
+    # --- Power chord (5): root + fifth only ---
+    if 5 in extensions and chord.qual.strip() == "":
+        arr = [0] * 12
+        arr[root_pc] = 1
+        arr[fifth] = 1
+        return arr
+
+    # --- Add 6th (or 1 treated as 6) ---
+    if any(e in (1, 6) for e in extensions):
         arr[(root_pc + 9) % 12] = 1
+
+    # --- Seventh chords ---
+    if 7 in extensions:
         arr[(root_pc + (11 if chord.ext_type == "^" else 10)) % 12] = 1
-
-    # Suspensions
-    if chord.sus == 2:
+    # --- Ninth chords ---
+    if 9 in extensions:
         arr[(root_pc + 2) % 12] = 1
-        arr[(root_pc + 4) % 12] = 0
-        arr[(root_pc + 7) % 12] = 1
-    elif chord.sus == 4:
+    # --- Eleventh chords ---
+    if 11 in extensions:
         arr[(root_pc + 5) % 12] = 1
-        arr[(root_pc + 4) % 12] = 0
-        arr[(root_pc + 7) % 12] = 1
+    # --- Thirteenth chords ---
+    if 13 in extensions:
+        arr[(root_pc + 9) % 12] = 1
 
-    # Bass
+    # --- Suspensions ---
+    if chord.sus == 2:
+        arr[third_major] = 0
+        arr[third_minor] = 0
+        arr[(root_pc + 2) % 12] = 1
+    elif chord.sus == 4:
+        arr[third_major] = 0
+        arr[third_minor] = 0
+        arr[(root_pc + 5) % 12] = 1
+
+    # --- Slash chords (bass note) ---
     if chord.bass:
         bpc = note_to_pitch_class(chord.bass)
         if bpc != -1:
             arr[bpc] = 1
+
+    # --- Special: A1 (or any X1) means only root note (avoid extra tones) ---
+    if 1 in extensions and chord.qual.strip() == "" and not chord.sus:
+        arr = [0] * 12
+        arr[root_pc] = 1
+
     return arr
 
 
 def print_chord(chord):
+
     out = chord.root
     if chord.qual.strip():
         out += chord.qual
+
     if chord.ext_type == "^":
         out += f"{chord.ext_type}{chord.extension}"
     elif chord.extension:
-        out += str(chord.extension)
+        if chord.extension in (9, 11, 13):
+            out += f"({chord.extension})"
+        else:
+            out += str(chord.extension)
+
+
     if chord.sus:
         out += f"sus{chord.sus}"
     if chord.bass:
         out += f"/{chord.bass}"
+
     print(out, end='')
 
 
@@ -363,49 +434,36 @@ def main():
         print("Error: cannot open file")
         sys.exit(1)
 
-    # --- Step 1: Parse chords ---
     chords = parse_song(filepath)
+    if not chords:
+        print("\n(No chords were parsed — check input file.)")
+        sys.exit(1)
 
-    # --- Step 2: Convert to linked list and calculate ---
     head = None
     for root, qual, ext, ext_type, sus, bass in chords:
         c = Chord()
         c.root, c.qual, c.extension, c.ext_type, c.sus, c.bass = (
-            root,
-            qual,
-            ext,
-            ext_type,
-            sus,
-            bass,
+            root, qual, ext, ext_type, sus, bass
         )
         head = append_chord(head, c)
 
-    # --- Step 3: Print and save histogram ---
     print("\n--- Pitch-Class Histogram ---")
     print_chords(head)
 
-    # === Save histogram output to file ===
     output_filename = os.path.splitext(os.path.basename(filepath))[0] + "_output.txt"
     with open(output_filename, "w") as out:
-        # Temporarily redirect stdout to file
         sys_stdout_backup = sys.stdout
         sys.stdout = out
-
         print("--- Pitch-Class Histogram ---")
         print_chords(head)
         print("Parsing and calculation completed successfully.")
-
-        # Restore stdout
         sys.stdout = sys_stdout_backup
 
-    print(f"\nHistogram has been saved to '{output_filename}'\n")
+    print(f"\nHistogram saved to '{output_filename}'\n")
     print("Parsing and calculation completed successfully.\n")
-
-
-    
-
 
 
 if __name__ == "__main__":
     main()
+
 
