@@ -1,266 +1,224 @@
 # =====================================================
-# === Parser Module (Echo Parser) =====================
+# === Parser Module  (Final Version) ===
 # =====================================================
 # Authors: Sebastián López, Diego Bonilla, Luis Baeza
 # =====================================================
 
+import re
 import sys
-import os
 
-# =============== Globals =============================
-token = ""          # current character
-input_file = None   # file handle
-parsed_chords = []  # [(root, qual, ext_type, ext, sus, bass)]
+# -----------------------------------------------------
+#  Low-level chord-token parsing
+# -----------------------------------------------------
 
-# =============== Lexer ===============================
-def get_char():
-    return input_file.read(1)
-
-def skip_ws(c):
-    while c and c in " \t\r":
-        c = get_char()
-    return c
-
-def get_token():
-    global token
-    c = get_char()
-    c = skip_ws(c)
-    token = c if c else ""
-
-def error(msg):
-    print(f"\\nError: {msg}", file=sys.stderr)
-    sys.exit(1)
-
-def match(ch, msg=None):
-    global token
-    if token != ch:
-        error(msg or f"'{ch}' expected, got '{token or 'EOF'}'")
-    print(ch, end="")
-    get_token()
-
-# =============== Notes / Accidentals =================
-def read_note():
-    """Read a note A-G with optional accidental (#, b, \, Z).
-       Normalize '\' -> '#', 'Z' -> 'b' for internal form.
+def parse_note(s, pos):
     """
-    global token
-    if token not in "ABCDEFG":
-        error(f"Invalid note letter '{token or 'EOF'}'")
-    note = token
-    get_token()
-    if token in ("#", "b", "\\", "Z"):
-        acc = token
-        if acc == "\\":
-            acc = "#"
-        elif acc == "Z":
-            acc = "b"
-        note += acc
-        get_token()
-    print(note, end="")
-    return note
-
-# =============== Helper consumers ====================
-def consume_parentheses():
-    """Consume balanced parenthesis groups like (9), (add9)."""
-    global token
-    while token == "(":
-        print("(", end="")
-        get_token()
-        while token and token != ")":
-            print(token, end="")
-            get_token()
-        match(")", "Missing ')' in parenthetical modifier")
-
-def consume_alpha_num_modifier():
-    """Consume alpha+digits words like no3, sus2, maj7 etc."""
-    global token
-    consumed = False
-    while token and token.isalpha():
-        consumed = True
-        while token and token.isalpha():
-            print(token, end="")
-            get_token()
-        while token and token.isdigit():
-            print(token, end="")
-            get_token()
-    return consumed
-
-def consume_trailing_modifiers():
-    """Greedy consumer for (9), no3, sus2, etc., appearing after the core chord."""
-    while True:
-        before = token
-        consume_parentheses()
-        did_words = consume_alpha_num_modifier()
-        if before == token and not did_words:
-            break
-
-# =============== Grammar nodes =======================
-def quality():
-    """Permissive quality: letters, '+', '-' (dash allowed anywhere until stopper)."""
-    global token
-    val = ""
-    while token and (token.isalpha() or token in {"+", "-"}):
-        # stop before a note letter (start of bass without '/')
-        if token in "ABCDEFG":
-            break
-        val += token
-        print(token, end="")
-        get_token()
-    return val
-
-def extensions_and_sus():
-    """Parse optional '^', digits for extensions, and allow dash-chains after digits.
-       Examples accepted: 7, 9, 11, 13, 5-7, 7-9, 5-, etc.
-       Also 'add9' and 'sus2/sus4' in-line.
+    Parse a note A–G with optional # or b from s[pos:].
+    Returns (note_string, new_pos).
+    Raises ValueError if no valid note at pos.
     """
-    global token
-    ext_type, ext, sus = "", None, None
+    if pos >= len(s) or s[pos] not in "ABCDEFG":
+        raise ValueError(f"Expected note at position {pos} in {s!r}")
+    note = s[pos]
+    pos += 1
+    if pos < len(s) and s[pos] in "#b":
+        note += s[pos]
+        pos += 1
+    return note, pos
 
-    if token == "^":
+
+def parse_chord_token(tok):
+    """
+    Parse a single chord token like:
+        D/E, C/D, B7#9, B-/E, E-7, C^13, E5, B-7/D, etc.
+
+    Returns:
+        (root, qual, ext_type, extension, sus, bass, omit3, omit5)
+
+    or:
+        None  if this token is "NC" (no chord).
+    """
+    tok = tok.strip()
+    if not tok:
+        return None
+
+    # ---- No chord (NC) ----
+    if tok.upper() == "NC":
+        # For the histogram we completely ignore NC (no chord row)
+        return None
+
+    # ---- Slash chords: X.../BASS ----
+    bass = ""
+    if "/" in tok:
+        left, right = tok.split("/", 1)
+        tok = left
+        # parse bass note (only the letter + accidental)
+        try:
+            bnote, bpos = parse_note(right, 0)
+            bass = bnote
+        except ValueError:
+            bass = ""
+
+    pos = 0
+
+    # ---- Root note ----
+    root, pos = parse_note(tok, pos)
+
+    # ---- Quality: -, +, o (minor, augmented, diminished) ----
+    qual = " "
+    if pos < len(tok) and tok[pos] in "-+o":
+        qual = tok[pos]
+        pos += 1
+
+    # ---- Extension type: '^' for maj7 etc. ----
+    ext_type = " "
+    if pos < len(tok) and tok[pos] == "^":
         ext_type = "^"
-        print("^", end="")
-        get_token()
+        pos += 1
 
-    # Base extension number(s)
-    if token and token.isdigit():
-        while token and token.isdigit():
-            print(token, end="")
-            get_token()
+    # ---- Extension number(s) (5, 6, 7, 9, 11, 13, etc.) ----
+    extension = 0
+    if pos < len(tok) and tok[pos].isdigit():
+        start = pos
+        while pos < len(tok) and tok[pos].isdigit():
+            pos += 1
+        try:
+            extension = int(tok[start:pos])
+        except ValueError:
+            extension = 0
 
-    # One or more "-<digits_optional>" groups (e.g., -7, -9, or just a trailing '-')
-    while token == "-":
-        print("-", end="")
-        get_token()
-        while token and token.isdigit():
-            print(token, end="")
-            get_token()
+    # ---- Parenthetical extension: A6(9), C(13), etc. ----
+    if pos < len(tok) and tok[pos] == "(":
+        endp = tok.find(")", pos + 1)
+        if endp != -1:
+            inner = tok[pos + 1:endp]
+            if inner.isdigit():
+                par_ext = int(inner)
+                if extension and par_ext and par_ext != extension:
+                    extension = (extension, par_ext)
+                elif extension == 0:
+                    extension = par_ext
+            pos = endp + 1
 
-    # Optional 'add' N
-    if token == 'a':
-        buf = ""
-        while token and token.isalpha():
-            buf += token
-            print(token, end="")
-            get_token()
-        if buf.lower() == "add":
-            while token and token.isdigit():
-                print(token, end="")
-                get_token()
+    # ---- Suspensions and omissions in trailing text ----
+    rest = tok[pos:]
 
-    # Optional 'sus' N
-    if token == 's':
-        buf = ""
-        while token and token.isalpha():
-            buf += token
-            print(token, end="")
-            get_token()
-        if buf.lower().startswith("sus"):
-            while token and token.isdigit():
-                print(token, end="")
-                get_token()
+    sus = 0
+    omit3 = False
+    omit5 = False
 
-    return ext_type, ext, sus
+    # omit3 / no3 / omit5 / no5
+    if "no3" in rest:
+        omit3 = True
+        rest = rest.replace("no3", "")
+    if "no5" in rest:
+        omit5 = True
+        rest = rest.replace("no5", "")
+    if "omit3" in rest:
+        omit3 = True
+        rest = rest.replace("omit3", "")
+    if "omit5" in rest:
+        omit5 = True
+        rest = rest.replace("omit5", "")
 
-def bass_note_if_any():
-    """Bass may be '/<note>' or immediately another note letter (implied slash)."""
-    global token
-    if token == "/":
-        match("/", "'/' expected before bass note")
-        return read_note()
-    if token in "ABCDEFG":
-        return read_note()
-    return None
+    # sus2 / sus4
+    if "sus2" in rest:
+        sus = 2
+        rest = rest.replace("sus2", "")
+    elif "sus4" in rest:
+        sus = 4
+        rest = rest.replace("sus4", "")
 
-def chord():
-    root = read_note()
-    qual = quality()
-    ext_type, ext, sus = extensions_and_sus()
-    consume_trailing_modifiers()
-    bass = bass_note_if_any()
-    parsed_chords.append((root, qual, ext_type, ext, sus, bass))
-    return True
+    return (root, qual, ext_type, extension, sus, bass, omit3, omit5)
 
-def bar():
-    chord()
-    while token and token not in "|\n":
-        if token == " ":
-            print(" ", end="")
-            get_token()
-            continue
-        chord()
-    match("|", "'|' expected at end of bar")
-    # Allow double bars '||...'
-    while token == "|":
-        print("|", end="")
-        get_token()
 
-def meter():
-    x = numerator()
-    print(f"{x}", end="")
-    match("/", "'/' expected in meter")
-    y = denominator()
-    print(f"/{y}", end="")
+# -----------------------------------------------------
+#  Song parser with '%' handling
+# -----------------------------------------------------
 
-def numerator():
-    global token
-    if not token.isdigit():
-        error("Meter numerator expected")
-    num = ""
-    while token and token.isdigit():
-        num += token
-        print(token, end="")
-        get_token()
-    return int(num)
-
-def denominator():
-    global token
-    if not token.isdigit():
-        error("Meter denominator expected")
-    den = ""
-    while token and token.isdigit():
-        den += token
-        print(token, end="")
-        get_token()
-    return int(den)
-
-def song():
-    # optional meter at beginning
-    if token and token.isdigit():
-        meter()
-        if token and token not in ("\n", "|"):
-            print(" ", end="")
-    while token:
-        if token == "\n":
-            print()
-            get_token()
-            continue
-        bar()
-
-# =============== Driver ==============================
 def parse_song(filepath):
-    global input_file, token, parsed_chords
-    parsed_chords = []
+    """
+    Returns a list of chord tuples:
+        (root, qual, ext_type, extension, sus, bass, omit3, omit5)
+
+    Behavior:
+    - Reads a full .txt chord chart (advanced.in style).
+    - Ignores a leading meter token like "4/4".
+    - Treats '|' as bar separators.
+    - Treats '%' as a repeat sign in the chart, but for this
+      calculator (to match the basic.out style you’re using
+      now) we DO NOT expand or count '%' again; we just
+      ignore it as input to the calculator.
+
+    - Ignores NC (no-chord) in the pitch histogram.
+    """
     with open(filepath, "r", encoding="utf-8") as f:
-        input_file = f
-        get_token()
-        song()
+        text = f.read()
+
+    # Echo original content (like the echo parser)
+    print(text, end="")
+
+    # 1) Normalize " X / Y " → "X/Y" so that '/' never becomes its own token
+    text = re.sub(r"\s*/\s*", "/", text)
+
+    # 2) Normalize bars: ensure '||' is treated as separate bars
+    text = text.replace("||", "| |")
+
+    # 3) Ensure bars are standalone tokens
+    text = text.replace("|", " | ")
+
+    tokens = text.split()
+
+    parsed_chords = []
+    current_bar_chords = []
+
+    for i, raw_tok in enumerate(tokens):
+        tok = raw_tok.strip()
+        if not tok:
+            # Skip empty tokens defensively
+            continue
+
+        # Optional meter at the very beginning: e.g. "4/4"
+        if i == 0 and re.match(r"^\d+/\d+$", tok):
+            continue
+
+        # Bar boundary: flush current bar into global list
+        if tok == "|":
+            if current_bar_chords:
+                parsed_chords.extend(current_bar_chords)
+            current_bar_chords = []
+            continue
+
+        # '%' repeat sign:
+        # For this calculator version, we are NOT expanding repeats,
+        # so we simply ignore '%' as a chord token.
+        if tok == "%":
+            continue
+
+        # Standalone slash should never appear now, but just in case:
+        if tok == "/":
+            continue
+
+        # Normal chord token
+        chord = parse_chord_token(tok)
+        if chord is not None:
+            current_bar_chords.append(chord)
+
+    # Flush final bar if there is no trailing '|'
+    if current_bar_chords:
+        parsed_chords.extend(current_bar_chords)
+
     return parsed_chords
 
-def main():
+
+# -----------------------------------------------------
+#  Standalone test driver
+# -----------------------------------------------------
+
+if __name__ == "__main__":
     if len(sys.argv) != 2:
         print("Usage: Parser.py <input.txt>")
         sys.exit(1)
-    filepath = sys.argv[1]
-    if not filepath.lower().endswith(".txt"):
-        print("Error: Only .txt files are supported")
-        sys.exit(1)
-    if not os.path.exists(filepath):
-        print("Error: cannot open file")
-        sys.exit(1)
-    chords = parse_song(filepath)
-    print(f"\\nTotal parsed chords: {len(chords)}")
-
-if __name__ == "__main__":
-    main()
-
-
+    fp = sys.argv[1]
+    chords = parse_song(fp)
+    print(f"\nParsed chords: {len(chords)}")
